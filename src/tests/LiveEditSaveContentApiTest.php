@@ -1,0 +1,139 @@
+<?php
+
+namespace MicroweberPackages\LiveEdit\tests;
+
+use PHPUnit\Framework\Attributes\Test;
+
+use Illuminate\Support\Facades\Auth;
+use MicroweberPackages\App\Http\Controllers\FrontendController;
+use Tests\TestCase;
+use MicroweberPackages\User\Models\User;
+use Modules\Page\Models\Page;
+
+
+class LiveEditSaveContentApiTest extends TestCase
+{
+
+    #[Test]
+
+    public function it_index(): void {
+        $user = User::where('is_admin', '=', '1')->first();
+        if (!$user) {
+            // mak user
+            $user = new User();
+            $user->username = 'admin';
+            $user->email = 'info@example.com';
+            $user->password = bcrypt('admin');
+            $user->is_admin = 1;
+            $user->is_active = 1;
+            $user->save();
+        }
+
+        Auth::login($user);
+        $user = User::where('is_admin', '=', '1')->first();
+
+        Auth::login($user);
+
+
+        $response = $this->call(
+            'GET',
+            route('home'),
+            [
+                'editmode' => 'y'
+            ]
+        );
+
+        $this->assertEquals(200, $response->getStatusCode());
+
+    }
+
+    #[Test]
+
+    public function it_save_content_on_page(): void {
+        $user = User::where('is_admin', '=', '1')->first();
+        Auth::login($user);
+        Page::where('title', 'LiveEditPage')->delete();
+        $newCleanPage = save_content([
+            'subtype' => 'static',
+            'content_type' => 'page',
+            'title' => 'LiveEditPage',
+            'url' => 'liveedittestsavetest',
+            'active_site_template' => 'Bootstrap',
+            'layout_file' => 'clean.blade.php',
+            'is_active' => 1,
+        ]);
+
+        $findPage = Page::whereId($newCleanPage)->first();
+        $this->assertEquals($findPage->id, $newCleanPage);
+
+
+        // Save on default lang
+        $contentFieldHtml = 'Example content saved from live edit api' . uniqid('_unit');
+        $fieldsData = [
+            'field_data_0' => [
+                'attributes' => [
+                    'class' => 'container edit',
+                    'rel' => 'content',
+                    'rel_id' => $findPage->id,
+                    'field' => 'content',
+                ],
+                'html' => $contentFieldHtml
+            ]
+        ];
+
+        $encoded = base64_encode(json_encode($fieldsData));
+        $_SERVER['HTTP_REFERER'] = content_link($findPage->id);
+
+        $response = $this->call(
+            'POST',
+            route('api.content.save_edit'),
+            [
+                'data_base64' => $encoded,
+            ],
+            [],    // cookies
+            [],    // files
+            $_SERVER // server (contains HTTP_REFERER)
+        );
+
+        $fieldSaved = $response->decodeResponseJson();
+
+        //    $this->assertEquals($fieldSaved[0]['table'], 'content');
+        $this->assertEquals($fieldSaved[0]['field'], 'content');
+
+        $saved_id = $findPage->id;
+        $saved_content = $contentFieldHtml;
+
+        $params = [];
+        $params['content_id'] = $saved_id;
+        $page = app()->content_manager->get_by_id($saved_id);
+
+        $this->assertNotEmpty($page);
+
+
+        $render_file = app()->template_manager->get_layout($page);
+        $this->assertTrue(str_contains($render_file, 'clean.'));
+
+
+        $frontRender = new FrontendController();
+        $html = $frontRender->frontend($params);
+        $contentFieldHtml = $saved_content;
+
+        $this->assertTrue(str_contains($html, $contentFieldHtml));
+
+
+        $response = $this->call(
+            'POST',
+            route('api.content.save_edit'),
+            [
+                'data_base64' => 'somethingthatisnotbase64',
+            ],
+            [],    // cookies
+            [],    // files
+            $_SERVER // server (contains HTTP_REFERER)
+        );
+        $fieldSaved = $response->decodeResponseJson();
+        $this->assertArrayHasKey('error', $fieldSaved);
+
+
+    }
+}
